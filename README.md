@@ -46,4 +46,4 @@ Supported profile: **HTTP** (Mythic EKE + AES compatible).
 
 ## License
 
-MIT License — see [LICENSE](LICENSE).
+MIT License — see [COPYING](COPYING).

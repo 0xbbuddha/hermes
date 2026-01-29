@@ -8,7 +8,7 @@
   "payload_output": ["python", "zip"],
   "architectures": ["x86_64", "arm_64"],
   "c2": ["http"],
-  "mythic_version": "3.0.0",
+  "mythic_version": "v3.4.21",
   "agent_version": "1.0.0",
   "supported_wrappers": []
 }
