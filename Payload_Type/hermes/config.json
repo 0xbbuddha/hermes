@@ -1,0 +1,8 @@
+{
+  "name": "hermes",
+  "description": "Agent Mythic C2 Hermes - Linux-only Python agent",
+  "version": "1.0.0",
+  "author": "0xbbuddha",
+  "license": "MIT",
+  "exclude": []
+}

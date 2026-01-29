@@ -1,0 +1,14 @@
+{
+  "os": ["Linux"],
+  "languages": ["python"],
+  "features": {
+    "mythic": ["artifacts", "docker", "file chunking", "file browser", "rpfwd", "socks"],
+    "custom": ["key exchange", "killdate"]
+  },
+  "payload_output": ["python", "zip"],
+  "architectures": ["x86_64", "arm_64"],
+  "c2": ["http"],
+  "mythic_version": "3.0.0",
+  "agent_version": "1.0.0",
+  "supported_wrappers": []
+}
