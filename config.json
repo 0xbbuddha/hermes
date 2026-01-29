@@ -1,8 +1,10 @@
 {
-  "name": "hermes",
-  "description": "Agent Mythic C2 Hermes - Linux-only Python agent (dieu messager)",
-  "version": "1.0.0",
-  "author": "0xbbuddha",
-  "license": "MIT",
-  "exclude": []
+  "exclude_payload_type": false,
+  "exclude_c2_profiles": false,
+  "exclude_documentation_payload": false,
+  "exclude_documentation_c2": false,
+  "exclude_agent_icons": false,
+  "remote_images": {
+    "hermes": "ghcr.io/0xbbuddha/hermes:latest"
+  }
 }
