@@ -34,7 +34,7 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
     ]
     agent_path = Path("agent_functions")
     agent_code_path = Path("agent_code")
-    agent_icon_path = agent_path / "hermes.png"
+    agent_icon_path = Path(__file__).parent.parent.parent.parent / "agent_icons" / "caduceus.png"
     build_steps = [
         BuildStep(step_name="Gathering Files", step_description="Gathering agent files"),
         BuildStep(step_name="Injecting Config", step_description="Injecting C2 config and UUID"),
