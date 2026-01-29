@@ -43,3 +43,7 @@ Then restart Mythic.
 ## C2
 
 Supported profile: **HTTP** (Mythic EKE + AES compatible).
+
+## License
+
+MIT License — see [LICENSE](LICENSE).
