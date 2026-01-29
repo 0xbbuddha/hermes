@@ -95,3 +95,42 @@ jobs:
           push: origin HEAD:${{ env.RELEASE_BRANCH }} --set-upstream
           pathspec_error_handling: exitImmediately
 
+  create_release:
+    runs-on: ubuntu-latest
+    needs:
+      - update_files
+    if: ${{ github.ref_type == 'tag' }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.VERSION }}
+          release_name: Release ${{ env.VERSION }}
+          body: |
+            ## Hermes ${{ env.VERSION }}
+            
+            Docker image available at: `${{ env.REGISTRY }}/${{ env.AGENT_IMAGE_NAME }}:${{ env.VERSION }}`
+            
+            ### Installation
+            
+            Install Hermes in Mythic:
+            ```bash
+            ./mythic-cli install github https://github.com/${{ github.repository }}.git
+            ```
+            
+            Or use the pre-built Docker image:
+            ```bash
+            ./mythic-cli install folder /path/to/hermes
+            ```
+          draft: false
+          prerelease: false
+
