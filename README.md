@@ -1,5 +1,7 @@
 # Hermes
 
+![Hermes](agent_icons/caduceus.png)
+
 Mythic C2 agent **Linux-only** written in Python. Named after Hermes, messenger god of Greek mythology.
 
 ## Installation
