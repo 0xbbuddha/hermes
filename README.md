@@ -1,7 +1,7 @@
 # Hermes
 
 <p align="center">
-  <img alt="Hermes Logo" src="agent_icons/caduceus.png" height="30%" width="30%">
+  <img alt="Hermes Logo" src="agent_icons/caduceus.svg" height="30%" width="30%">
 </p>
 
 Mythic C2 agent **Linux-only** written in Python. Named after Hermes, messenger god of Greek mythology.
@@ -13,7 +13,7 @@ From the Mythic installation directory:
 ```bash
 ./mythic-cli install folder /path/to/hermes
 # or
-sudo -E ./mythic-cli install folder /path/to/hermes
+sudo -E ./mythic-cli install github https://github.com/0xbbuddha/hermes
 ```
 
 Then restart Mythic.
