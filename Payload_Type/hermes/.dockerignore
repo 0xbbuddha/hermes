@@ -1,0 +1,11 @@
+# Ignore unnecessary files during Docker build
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.github/
+*.md
+.gitignore
+*.log
+*.tmp

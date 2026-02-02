@@ -49,7 +49,7 @@ jobs:
       - name: Build and push the container image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: Payload_Type/hermes
           file: Payload_Type/hermes/Dockerfile
           tags: |
             ${{ env.REGISTRY }}/${{ env.AGENT_IMAGE_NAME }}:${{ env.VERSION }}
