@@ -350,6 +350,55 @@ class HermesAgent:
                 else:
                     out["user_output"] = "Missing path or contents"
                     out["status"] = "error"
+            elif cmd == "ps":
+                r = subprocess.run(["ps", "aux"], capture_output=True, text=True, timeout=30)
+                out["user_output"] = r.stdout or r.stderr or "No output"
+            elif cmd == "netstat":
+                # Try ss first (modern), fallback to netstat
+                r = subprocess.run(["ss", "-tunap"], capture_output=True, text=True, timeout=30)
+                if r.returncode != 0:
+                    r = subprocess.run(["netstat", "-tunap"], capture_output=True, text=True, timeout=30)
+                out["user_output"] = r.stdout or r.stderr or "No output"
+            elif cmd == "ifconfig":
+                # Try ip first (modern), fallback to ifconfig
+                r = subprocess.run(["ip", "addr"], capture_output=True, text=True, timeout=30)
+                if r.returncode != 0:
+                    r = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=30)
+                out["user_output"] = r.stdout or r.stderr or "No output"
+            elif cmd == "env":
+                out["user_output"] = "\n".join([f"{k}={v}" for k, v in os.environ.items()])
+            elif cmd == "rm":
+                path = params.get("path", "")
+                recursive = params.get("recursive", False)
+                path = os.path.join(self._cwd, path) if path and not os.path.isabs(path) else path
+                if recursive:
+                    import shutil
+                    shutil.rmtree(path)
+                    out["user_output"] = f"Removed directory: {path}"
+                else:
+                    os.remove(path)
+                    out["user_output"] = f"Removed: {path}"
+            elif cmd == "mkdir":
+                path = params.get("path", "")
+                path = os.path.join(self._cwd, path) if path and not os.path.isabs(path) else path
+                os.makedirs(path, exist_ok=True)
+                out["user_output"] = f"Created directory: {path}"
+            elif cmd == "cp":
+                src = params.get("source", "")
+                dst = params.get("destination", "")
+                src = os.path.join(self._cwd, src) if src and not os.path.isabs(src) else src
+                dst = os.path.join(self._cwd, dst) if dst and not os.path.isabs(dst) else dst
+                import shutil
+                shutil.copy2(src, dst)
+                out["user_output"] = f"Copied {src} to {dst}"
+            elif cmd == "mv":
+                src = params.get("source", "")
+                dst = params.get("destination", "")
+                src = os.path.join(self._cwd, src) if src and not os.path.isabs(src) else src
+                dst = os.path.join(self._cwd, dst) if dst and not os.path.isabs(dst) else dst
+                import shutil
+                shutil.move(src, dst)
+                out["user_output"] = f"Moved {src} to {dst}"
             else:
                 out["user_output"] = f"Unknown command: {cmd}"
                 out["status"] = "error"

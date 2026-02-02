@@ -1,7 +1,7 @@
 # Hermes
 
 <p align="center">
-  <img alt="Hermes Logo" src="agent_icons/caduceus.svg" height="30%" width="30%">
+  <img alt="Hermes Logo" src="agent_icons/caduceus.svgq" height="30%" width="30%">
 </p>
 
 Mythic C2 agent **Linux-only** written in Python. Named after Hermes, messenger god of Greek mythology.
@@ -26,7 +26,7 @@ Then restart Mythic.
 ## Features
 
 - Check-in and tasking via HTTP profile (EKE + AES)
-- Commands: `shell`, `ls`, `pwd`, `cat`, `cd`, `download`, `upload`, `sleep`, `exit`, `whoami`
+- 18 built-in commands for reconnaissance and file operations
 - Output: Python script `.py` or deployable directory
 
 ## Commands
@@ -40,9 +40,17 @@ Then restart Mythic.
 | cd        | Change directory                     |
 | download  | Download a file from target          |
 | upload    | Upload a file to target              |
-| sleep     | Callback interval (seconds)         |
+| sleep     | Callback interval (seconds)          |
 | exit      | Exit the agent                       |
 | whoami    | User / hostname                      |
+| ps        | List running processes               |
+| netstat   | Network connections and ports        |
+| ifconfig  | Network interface configuration      |
+| env       | Environment variables                |
+| rm        | Remove file or directory             |
+| mkdir     | Create directory                     |
+| cp        | Copy file                            |
+| mv        | Move or rename file                  |
 
 ## C2
 
