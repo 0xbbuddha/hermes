@@ -21,6 +21,7 @@ class ExitCommand(CommandBase):
     author = "@0xbbuddha"
     argument_class = ExitArguments
     attackmapping = []
+    supported_ui_features = ["callback_table:exit"]
     attributes = CommandAttributes(supported_os=[SupportedOS.Linux])
 
     async def create_tasking(self, task: MythicTask) -> MythicTask:

