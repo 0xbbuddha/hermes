@@ -59,7 +59,10 @@ Then restart Mythic.
 
 ## C2
 
-Supported profile: **HTTP** (Mythic EKE + AES compatible).
+Supported profile: **HTTP** (Mythic compatible).
+
+- **EKE (staging_rsa)**: Check "Performs Key Exchange" in the HTTP profile (recommended).
+- **AESPSK**: Uncheck "Performs Key Exchange" to use a pre-shared AES key injected at build time; the callback works without key exchange.
 
 ## License
 

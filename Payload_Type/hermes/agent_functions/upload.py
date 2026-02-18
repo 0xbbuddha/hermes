@@ -10,13 +10,13 @@ class UploadArguments(TaskArguments):
             CommandParameter(
                 name="path",
                 type=ParameterType.String,
-                description="Chemin de destination sur la cible",
+                description="Destination path on target",
                 parameter_group_info=[ParameterGroupInfo(group_name="Default", ui_position=0, required=True)],
             ),
             CommandParameter(
                 name="file",
                 type=ParameterType.File,
-                description="Fichier à envoyer",
+                description="File to upload",
                 parameter_group_info=[ParameterGroupInfo(group_name="Default", ui_position=1, required=True)],
             ),
         ]

@@ -10,7 +10,7 @@ class SleepArguments(TaskArguments):
             CommandParameter(
                 name="seconds",
                 type=ParameterType.Number,
-                description="Intervalle de callback en secondes",
+                description="Callback interval in seconds",
                 parameter_group_info=[ParameterGroupInfo(group_name="Default", ui_position=0, required=True)],
             )
         ]

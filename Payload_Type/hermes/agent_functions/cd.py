@@ -10,14 +10,14 @@ class CdArguments(TaskArguments):
             CommandParameter(
                 name="path",
                 type=ParameterType.String,
-                description="Répertoire de destination",
+                description="Destination directory",
                 parameter_group_info=[ParameterGroupInfo(group_name="Default", ui_position=0, required=True)],
             )
         ]
 
     async def parse_arguments(self):
         if len(self.command_line) == 0:
-            raise ValueError("Chemin requis")
+            raise ValueError("Path required")
         self.add_arg("path", self.command_line)
 
 

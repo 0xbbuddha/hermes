@@ -17,7 +17,7 @@ class CatArguments(TaskArguments):
 
     async def parse_arguments(self):
         if len(self.command_line) == 0:
-            raise ValueError("Chemin du fichier requis")
+            raise ValueError("File path required")
         self.add_arg("path", self.command_line)
 
 

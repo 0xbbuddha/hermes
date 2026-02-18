@@ -26,7 +26,7 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
         BuildParameter(
             name="output_type",
             parameter_type=BuildParameterType.ChooseOne,
-            description="Type de sortie",
+            description="Output type",
             choices=["python", "zip"],
             default_value="python",
             required=False,
@@ -63,10 +63,10 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
 
             c2 = self.c2info[0]
             profile = c2.get_c2profile()
-            build_stdout += f"[DEBUG] Profil C2 détecté: {profile.get('name', 'unknown')}\n"
+            build_stdout += f"[DEBUG] C2 profile detected: {profile.get('name', 'unknown')}\n"
             
             if profile.get("name") != "http":
-                build_stderr += f"Hermes ne supporte que le profil C2 HTTP. Profil détecté: {profile.get('name', 'unknown')}\n"
+                build_stderr += f"Hermes only supports the HTTP C2 profile. Detected profile: {profile.get('name', 'unknown')}\n"
                 return BuildResponse(
                     status=BuildStatus.Error,
                     build_stdout=build_stdout,
@@ -75,7 +75,7 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
 
             params = c2.get_parameters_dict()
             
-            # Extraire callback_host
+            # Extract callback_host
             try:
                 callback_host_raw = params.get("callback_host")
                 if isinstance(callback_host_raw, dict):
@@ -83,18 +83,18 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
                 else:
                     callback_host = str(callback_host_raw) if callback_host_raw else ""
             except Exception as e:
-                build_stderr += f"Warning: Erreur lors de l'extraction de callback_host: {e}\n"
+                build_stderr += f"Warning: Error extracting callback_host: {e}\n"
                 callback_host = ""
             
             # Check for dangerous default values
             if not callback_host or callback_host in ["https://domain.com", "http://domain.com", "domain.com"]:
-                build_stderr += f"ATTENTION: callback_host est défini sur '{callback_host}' (valeur par défaut).\n"
-                build_stderr += "Veuillez configurer le profil HTTP avec votre adresse/IP réelle.\n"
-                build_stderr += "Le build continuera mais l'agent ne pourra pas se connecter.\n\n"
+                build_stderr += f"WARNING: callback_host is set to '{callback_host}' (default value).\n"
+                build_stderr += "Please configure the HTTP profile with your real address/IP.\n"
+                build_stderr += "Build will continue but the agent may not connect.\n\n"
             
             callback_host = callback_host or "http://127.0.0.1"
             
-            # Extraire callback_port
+            # Extract callback_port
             callback_port = 443
             try:
                 if "callback_port" in params:
@@ -110,7 +110,7 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
                     else:
                         callback_port = int(v) if v else 443
             except (ValueError, TypeError) as e:
-                build_stderr += f"Warning: Erreur lors de l'extraction du port, utilisation de 443 par défaut: {e}\n"
+                build_stderr += f"Warning: Error extracting port, using 443 by default: {e}\n"
                 callback_port = 443
 
             # Extract post_uri
@@ -120,14 +120,14 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
                     post_uri = post_uri_raw.get("value", "/api/v1.4/agent_message")
                 else:
                     post_uri = str(post_uri_raw) if post_uri_raw else "/api/v1.4/agent_message"
-                # S'assurer que post_uri commence par /
+                # Ensure post_uri starts with /
                 if post_uri and not post_uri.startswith("/"):
                     post_uri = "/" + post_uri
             except Exception as e:
-                build_stderr += f"Warning: Erreur lors de l'extraction de post_uri: {e}\n"
+                build_stderr += f"Warning: Error extracting post_uri: {e}\n"
                 post_uri = "/api/v1.4/agent_message"
 
-            # Extraire headers
+            # Extract headers
             headers_raw = params.get("headers")
             headers = {}
             try:
@@ -143,21 +143,21 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
                             except json.JSONDecodeError:
                                 headers = {}
                     else:
-                        # headers est directement un dict
+                        # headers is a dict
                         headers = headers_raw
                 elif isinstance(headers_raw, str):
-                    # headers est une string JSON
+                    # headers is a JSON string
                     try:
                         headers = json.loads(headers_raw)
                     except json.JSONDecodeError:
                         headers = {}
             except Exception as e:
-                build_stderr += f"Warning: Erreur lors de l'extraction des headers: {e}\n"
+                build_stderr += f"Warning: Error extracting headers: {e}\n"
                 headers = {}
             
             headers_json = json.dumps(headers)
 
-            # Extraire interval
+            # Extract interval
             try:
                 interval_raw = params.get("callback_interval")
                 if isinstance(interval_raw, dict):
@@ -189,6 +189,39 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
             except Exception:
                 killdate = ""
 
+            # encrypted_exchange_check: False = use AESPSK (no EKE), True = staging_rsa
+            use_psk = False
+            try:
+                eec = params.get("encrypted_exchange_check")
+                if isinstance(eec, dict):
+                    val = eec.get("value", True)
+                    use_psk = val is False if isinstance(val, bool) else (str(val).lower() in ("false", "0", "f", "no"))
+                elif isinstance(eec, bool):
+                    use_psk = not eec
+                else:
+                    use_psk = str(eec).lower() in ("false", "0", "f", "no") if eec is not None else False
+            except Exception:
+                use_psk = False
+
+            # AESPSK: pre-shared key (base64) when use_psk=True
+            aes_psk_b64 = ""
+            if use_psk:
+                try:
+                    raw = params.get("AESPSK")
+                    if isinstance(raw, dict):
+                        if "enc_key" in raw and raw.get("enc_key"):
+                            aes_psk_b64 = str(raw["enc_key"]).strip()
+                        elif "value" in raw and isinstance(raw["value"], dict) and raw["value"].get("enc_key"):
+                            aes_psk_b64 = str(raw["value"]["enc_key"]).strip()
+                        elif "value" in raw and isinstance(raw["value"], str) and raw["value"].strip():
+                            aes_psk_b64 = str(raw["value"]).strip()
+                    elif isinstance(raw, str) and raw.strip():
+                        aes_psk_b64 = raw.strip()
+                    if not aes_psk_b64:
+                        build_stderr += "AESPSK requested (encrypted_exchange_check=False) but AESPSK key missing or empty.\n"
+                except Exception as e:
+                    build_stderr += f"AESPSK extraction error: {e}\n"
+
             # Build base_url
             try:
                 if "://" not in callback_host:
@@ -202,7 +235,7 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
                 if not base_url.endswith("/"):
                     base_url += "/"
             except Exception as e:
-                build_stderr += f"Warning: Erreur lors de la construction de base_url: {e}\n"
+                build_stderr += f"Warning: Error building base_url: {e}\n"
                 base_url = "http://127.0.0.1:80/"
 
             build_stdout += "[+] Step 1: Gathering files...\n"
@@ -230,8 +263,10 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
             content = re.sub(r'(CONFIG_INTERVAL\s*=\s*)"[^"]*"', rf'\1"{interval}"', content, count=1)
             content = re.sub(r'(CONFIG_JITTER\s*=\s*)"[^"]*"', rf'\1"{jitter}"', content, count=1)
             content = re.sub(r'(CONFIG_KILLDATE\s*=\s*)"[^"]*"', rf'\1{json.dumps(killdate)}', content, count=1)
+            content = re.sub(r'(CONFIG_USE_PSK\s*=\s*)"[^"]*"', rf'\1"{str(use_psk).lower()}"', content, count=1)
+            content = re.sub(r'(CONFIG_AESPSK\s*=\s*)"[^"]*"', rf'\1{json.dumps(aes_psk_b64)}', content, count=1)
 
-            build_stdout += "[+] Étape 3: Finalisation...\n"
+            build_stdout += "[+] Step 3: Finalizing...\n"
             payload_bytes = content.encode("utf-8")
             output_type = self.get_parameter("output_type") or "python"
 
@@ -261,9 +296,9 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
 
         except Exception as e:
             import traceback
-            build_stderr += f"Erreur: {str(e)}\n"
+            build_stderr += f"Error: {str(e)}\n"
             build_stderr += f"Traceback: {traceback.format_exc()}\n"
-            build_stderr += f"Type de l'erreur: {type(e).__name__}\n"
+            build_stderr += f"Error type: {type(e).__name__}\n"
             return BuildResponse(
                 status=BuildStatus.Error,
                 build_stdout=build_stdout,
