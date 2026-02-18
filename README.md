@@ -26,31 +26,36 @@ Then restart Mythic.
 ## Features
 
 - Check-in and tasking via HTTP profile (EKE + AES)
-- 18 built-in commands for reconnaissance and file operations
+- 23 built-in commands for reconnaissance, file operations and system info
 - Output: Python script `.py` or deployable directory
 
 ## Commands
 
-| Command   | Description                          |
-|-----------|--------------------------------------|
-| shell     | Execute a shell command              |
-| ls        | List a directory                     |
-| pwd       | Current working directory            |
-| cat       | Display a file                       |
-| cd        | Change directory                     |
-| download  | Download a file from target          |
-| upload    | Upload a file to target              |
-| sleep     | Callback interval (seconds)          |
-| exit      | Exit the agent                       |
-| whoami    | User / hostname                      |
-| ps        | List running processes               |
-| netstat   | Network connections and ports        |
-| ifconfig  | Network interface configuration      |
-| env       | Environment variables                |
-| rm        | Remove file or directory             |
-| mkdir     | Create directory                     |
-| cp        | Copy file                            |
-| mv        | Move or rename file                  |
+| Command     | Description                                    |
+|-------------|------------------------------------------------|
+| shell       | Execute a shell command                        |
+| ls          | List a directory                               |
+| pwd         | Current working directory                      |
+| cat         | Display a file                                 |
+| cd          | Change directory                               |
+| download    | Download a file from target                    |
+| upload      | Upload a file to target                        |
+| sleep       | Callback interval (seconds)                    |
+| exit        | Exit the agent                                 |
+| whoami      | User / hostname                                |
+| systeminfo  | System info (OS, kernel, arch, uptime, IPs)     |
+| ps          | List running processes                         |
+| netstat     | Network connections and ports                  |
+| ifconfig    | Network interface configuration                |
+| env         | Environment variables                          |
+| rm          | Remove file or directory                       |
+| mkdir       | Create directory                               |
+| cp          | Copy file                                      |
+| mv          | Move or rename file                            |
+| chmod       | Change file/directory permissions              |
+| chown       | Change file/directory owner                     |
+| grep        | Search pattern in files (regex, recursive)     |
+| find        | Find files/directories (name glob, type, depth)|
 
 ## C2
 

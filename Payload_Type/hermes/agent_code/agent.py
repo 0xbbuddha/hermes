@@ -591,6 +591,191 @@ class HermesAgent:
                     except Exception as e:
                         out["user_output"] = f"Error moving {src} to {dst}: {e}"
                         out["status"] = "error"
+            elif cmd == "systeminfo":
+                lines = []
+                try:
+                    lines.append(f"Hostname: {get_hostname()}")
+                    lines.append(f"User: {get_user()}")
+                    lines.append(f"OS: {platform.system()} {platform.release()}")
+                    lines.append(f"Architecture: {platform.machine()}")
+                    lines.append(f"PID: {os.getpid()}")
+                    lines.append(f"CWD: {self._cwd}")
+                    try:
+                        with open("/proc/uptime", "r") as f:
+                            secs = float(f.read().split()[0])
+                            days, rest = divmod(int(secs), 86400)
+                            h, rest = divmod(rest, 3600)
+                            m, s = divmod(rest, 60)
+                            lines.append(f"Uptime: {days}d {h}h {m}m {s}s")
+                    except Exception:
+                        lines.append("Uptime: N/A")
+                    try:
+                        ips = get_ips()
+                        lines.append(f"IPs: {', '.join(ips)}")
+                    except Exception:
+                        lines.append("IPs: N/A")
+                    out["user_output"] = "\n".join(lines)
+                except Exception as e:
+                    out["user_output"] = str(e)
+                    out["status"] = "error"
+            elif cmd == "chmod":
+                path = self._get_param(params, "path", "")
+                mode = self._get_param(params, "mode", "")
+                recursive = params.get("recursive", False)
+                if not isinstance(recursive, bool):
+                    recursive = False
+                if not path or not mode:
+                    out["user_output"] = "Path and mode required"
+                    out["status"] = "error"
+                else:
+                    path = os.path.join(self._cwd, path) if not os.path.isabs(path) else path
+                    try:
+                        cmd_args = ["chmod", "-R" if recursive else None, mode, path]
+                        cmd_args = [x for x in cmd_args if x is not None]
+                        r = subprocess.run(cmd_args, capture_output=True, text=True, timeout=30, cwd=self._cwd or None)
+                        out["user_output"] = (r.stdout or "") + (r.stderr or "")
+                        if r.returncode != 0:
+                            out["status"] = "error"
+                        else:
+                            out["user_output"] = out["user_output"] or f"chmod {'-R ' if recursive else ''}{path} {mode}"
+                    except Exception as e:
+                        out["user_output"] = f"Error: {e}"
+                        out["status"] = "error"
+            elif cmd == "chown":
+                path = self._get_param(params, "path", "")
+                owner = self._get_param(params, "owner", "")
+                recursive = params.get("recursive", False)
+                if not isinstance(recursive, bool):
+                    recursive = False
+                if not path or not owner:
+                    out["user_output"] = "Path and owner required"
+                    out["status"] = "error"
+                else:
+                    path = os.path.join(self._cwd, path) if not os.path.isabs(path) else path
+                    try:
+                        cmd_args = ["chown", "-R" if recursive else None, owner, path]
+                        cmd_args = [x for x in cmd_args if x is not None]
+                        r = subprocess.run(cmd_args, capture_output=True, text=True, timeout=30, cwd=self._cwd or None)
+                        out["user_output"] = (r.stdout or "") + (r.stderr or "")
+                        if r.returncode != 0:
+                            out["status"] = "error"
+                        else:
+                            out["user_output"] = out["user_output"] or f"chown {'-R ' if recursive else ''}{path} {owner}"
+                    except Exception as e:
+                        out["user_output"] = f"Error: {e}"
+                        out["status"] = "error"
+            elif cmd == "grep":
+                pattern = self._get_param(params, "pattern", "")
+                path = self._get_param(params, "path", ".")
+                recursive = params.get("recursive", False)
+                if not isinstance(recursive, bool):
+                    recursive = False
+                ignore_case = params.get("ignore_case", False)
+                if not isinstance(ignore_case, bool):
+                    ignore_case = False
+                if not pattern:
+                    out["user_output"] = "Pattern required"
+                    out["status"] = "error"
+                else:
+                    path = os.path.join(self._cwd, path) if not os.path.isabs(path) else path
+                    try:
+                        import re
+                        flags = re.IGNORECASE if ignore_case else 0
+                        regex = re.compile(pattern, flags)
+                        results = []
+                        if os.path.isfile(path):
+                            for i, line in enumerate(open(path, "r", errors="replace"), 1):
+                                if regex.search(line):
+                                    results.append(f"{path}:{i}: {line.rstrip()}")
+                        elif os.path.isdir(path):
+                            if recursive:
+                                for root, dirs, files in os.walk(path):
+                                    for f in files:
+                                        fp = os.path.join(root, f)
+                                        try:
+                                            for i, line in enumerate(open(fp, "r", errors="replace"), 1):
+                                                if regex.search(line):
+                                                    results.append(f"{fp}:{i}: {line.rstrip()}")
+                                        except (IOError, OSError):
+                                            pass
+                            else:
+                                for f in os.listdir(path):
+                                    fp = os.path.join(path, f)
+                                    if os.path.isfile(fp):
+                                        try:
+                                            for i, line in enumerate(open(fp, "r", errors="replace"), 1):
+                                                if regex.search(line):
+                                                    results.append(f"{fp}:{i}: {line.rstrip()}")
+                                        except (IOError, OSError):
+                                            pass
+                        else:
+                            out["user_output"] = f"Not a file or directory: {path}"
+                            out["status"] = "error"
+                            return out
+                        out["user_output"] = "\n".join(results) if results else "No matches"
+                    except re.error as e:
+                        out["user_output"] = f"Invalid regex: {e}"
+                        out["status"] = "error"
+                    except Exception as e:
+                        out["user_output"] = str(e)
+                        out["status"] = "error"
+            elif cmd == "find":
+                path = self._get_param(params, "path", ".")
+                name_glob = self._get_param(params, "name", "")
+                type_filter = self._get_param(params, "type_filter", "any")
+                if type_filter not in ("file", "directory", "any"):
+                    type_filter = "any"
+                max_depth = params.get("max_depth", 0)
+                if not isinstance(max_depth, (int, float)):
+                    try:
+                        max_depth = int(max_depth)
+                    except (ValueError, TypeError):
+                        max_depth = 0
+                max_results = params.get("max_results", 500)
+                if not isinstance(max_results, (int, float)):
+                    try:
+                        max_results = int(max_results)
+                    except (ValueError, TypeError):
+                        max_results = 500
+                path = os.path.join(self._cwd, path) if not os.path.isabs(path) else path
+                if not os.path.isdir(path):
+                    out["user_output"] = f"No such directory: {path}"
+                    out["status"] = "error"
+                else:
+                    try:
+                        import fnmatch
+                        results = []
+                        depth_limit = max_depth if max_depth > 0 else None
+                        for root, dirs, files in os.walk(path):
+                            if depth_limit is not None:
+                                rel = os.path.relpath(root, path)
+                                if rel == ".":
+                                    current_depth = 0
+                                else:
+                                    current_depth = len(rel.split(os.sep))
+                                if current_depth > depth_limit:
+                                    dirs.clear()
+                                    continue
+                            for d in dirs:
+                                full = os.path.join(root, d)
+                                if type_filter in ("directory", "any") and (not name_glob or fnmatch.fnmatch(d, name_glob)):
+                                    results.append(full)
+                                    if len(results) >= max_results:
+                                        break
+                            if len(results) >= max_results:
+                                break
+                            for f in files:
+                                full = os.path.join(root, f)
+                                if type_filter in ("file", "any") and (not name_glob or fnmatch.fnmatch(f, name_glob)):
+                                    results.append(full)
+                                    if len(results) >= max_results:
+                                        break
+                            if len(results) >= max_results:
+                                break
+                        out["user_output"] = "\n".join(results) if results else "No results"
+                    except Exception as e:
+                        out["user_output"] = str(e)
+                        out["status"] = "error"
             else:
                 out["user_output"] = f"Unknown command: {cmd}"
                 out["status"] = "error"

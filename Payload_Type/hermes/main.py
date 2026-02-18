@@ -19,5 +19,10 @@ from agent_functions import rm
 from agent_functions import mkdir
 from agent_functions import cp
 from agent_functions import mv
+from agent_functions import systeminfo
+from agent_functions import chmod
+from agent_functions import chown
+from agent_functions import grep
+from agent_functions import find_cmd
 
 mythic_container.mythic_service.start_and_run_forever()
