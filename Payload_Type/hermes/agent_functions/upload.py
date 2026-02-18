@@ -22,7 +22,16 @@ class UploadArguments(TaskArguments):
         ]
 
     async def parse_arguments(self):
-        pass
+        if isinstance(self.command_line, str) and self.command_line.strip().startswith("{"):
+            self.load_args_from_json_string(self.command_line)
+            return
+
+        cl = (self.command_line or "").strip()
+        if cl:
+            self.add_arg("path", cl)
+            return
+
+        return
 
 
 class UploadCommand(CommandBase):
