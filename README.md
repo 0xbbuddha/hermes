@@ -1,8 +1,8 @@
-# Hermes
-
 <p align="center">
   <img alt="Hermes Logo" src="agent_icons/hermes.svg" height="30%" width="30%">
 </p>
+
+# Hermes
 
 Hermes is a lightweight Linux agent written in Python, designed for Mythic 3.0 and newer. Named after Hermes, messenger of the gods — built for speed and discretion.
 
@@ -10,6 +10,7 @@ Hermes is a lightweight Linux agent written in Python, designed for Mythic 3.0 a
 
 - Linux support
 - SOCKS5 proxy support for pivoting and lateral movement
+- Multiple C2 profiles: HTTP, Notion
 - Encrypted Key Exchange (EKE) with RSA-4096 + AES-256-CBC + HMAC-SHA256
 - AESPSK support (pre-shared key, no key exchange required)
 - 24 built-in commands covering:
@@ -37,31 +38,13 @@ Hermes communicates over the default HTTP profile used by Mythic. All taskings a
 
 > **Note:** The GET URI parameter is unused — only POST is supported.
 
-## SOCKS5
+### Notion
 
-Hermes supports SOCKS5 proxying through the C2 channel, allowing operators to reach internal network resources via the compromised host.
+Hermes can use a Notion database as a covert C2 channel. The agent communicates with Mythic by creating and reading pages in a shared Notion database, making traffic blend in with legitimate Notion API calls.
 
-Start the proxy from the Mythic UI (use a port in the `7000-7010` range exposed by Mythic by default):
-
-```
-socks start 7001
-```
-
-Use `proxychains` or any SOCKS5-compatible tool on your C2 server:
-
-```bash
-proxychains nmap -sT 192.168.1.0/24
-curl --socks5 127.0.0.1:7001 http://192.168.1.50/
-proxychains xfreerdp /v:192.168.1.10 /u:Administrator
-```
-
-Stop the proxy:
-
-```
-socks stop 7001
-```
-
-> **Note:** SOCKS5 traffic is relayed through the agent's C2 polling loop. A lower sleep interval improves proxy responsiveness.
+Requires:
+- A Notion integration token (`integration_token`)
+- A shared Notion database ID (`database_id`)
 
 ## Opsec Considerations
 
@@ -71,10 +54,10 @@ Hermes is a Python agent and requires Python 3.8+ to be present on the target sy
 
 ### Build Formats
 
-| Format              | Description                                                    |
-|---------------------|----------------------------------------------------------------|
-| Python script (`.py`) | Minimal footprint, requires Python on target                 |
-| Directory bundle    | Self-contained with dependencies, easier to deploy            |
+| Format                | Description                                               |
+|-----------------------|-----------------------------------------------------------|
+| Python script (`.py`) | Minimal footprint, requires Python on target              |
+| Directory bundle      | Self-contained with dependencies, easier to deploy        |
 
 ### Sleep Interval
 
