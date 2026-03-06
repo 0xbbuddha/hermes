@@ -27,6 +27,7 @@ Then restart Mythic.
 
 - Check-in and tasking via HTTP profile (EKE + AES)
 - 23 built-in commands for reconnaissance, file operations and system info
+- SOCKS5 proxy tunneled through the C2 channel (lateral movement / pivoting)
 - Output: Python script `.py` or deployable directory
 
 ## Commands
@@ -56,6 +57,22 @@ Then restart Mythic.
 | chown       | Change file/directory owner                     |
 | grep        | Search pattern in files (regex, recursive)     |
 | find        | Find files/directories (name glob, type, depth)|
+| socks       | Start/stop a SOCKS5 proxy tunneled through C2  |
+
+## Pivoting
+
+Hermes supports SOCKS5 proxying through the C2 channel, allowing you to reach internal network resources via the compromised host.
+
+```bash
+# Start the proxy (use a port in the 7000-7010 range exposed by Mythic)
+socks start 7001
+
+# Use proxychains or curl to reach internal resources
+proxychains nmap -sT 192.168.1.0/24
+curl --socks5 127.0.0.1:7001 http://192.168.1.50/
+```
+
+Stop with `socks stop 7001`.
 
 ## C2
 

@@ -24,5 +24,6 @@ from agent_functions import chmod
 from agent_functions import chown
 from agent_functions import grep
 from agent_functions import find_cmd
+from agent_functions import socks
 
 mythic_container.mythic_service.start_and_run_forever()
